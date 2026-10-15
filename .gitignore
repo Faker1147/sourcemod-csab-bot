@@ -1,0 +1,14 @@
+# 编译产物
+*.smx
+compiled/
+build/
+
+# SourceMod 运行时文件
+addons/sourcemod/logs/
+*.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
