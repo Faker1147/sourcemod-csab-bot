@@ -6,10 +6,13 @@
 #include <sdkhooks>
 #include <cstrike>
 
-#define PLUGIN_VERSION  "2.0.0"
-#define MAX_PRIORITY    32
-#define MAX_ROSTER      160
-#define MAX_BEHAVIOR    16
+#define PLUGIN_VERSION  "2.1.0"
+#define MAX_PRIORITY    16      // 每个行为档最多武器数（原 32，实际最多 7）
+#define MAX_ROSTER      160     // BOT 名单上限
+#define MAX_BEHAVIOR    12      // 行为档上限（原 16，实际 6）
+#define WEAPON_NAME_MAX 24      // 武器名/类名缓冲长度（原 32）
+#define MAX_BOTNAME     40      // BOT 名字长度（原 64）
+#define MAX_BEHAVIORNAME 24     // 行为档名字长度（原 32）
 
 #define FILE_BEHAVIOR   "configs/csab_bot/behavior.cfg"
 #define FILE_ROSTER     "configs/csab_bot/roster.cfg"
@@ -27,11 +30,12 @@ ConVar g_cvEnabled;
 ConVar g_cvAutoBuy;
 ConVar g_cvAutoBuyArmor;
 ConVar g_cvAimMult;
+ConVar g_cvTeammatesEnemy;   // 队友是否视为敌人
 
 // ==================== 结构 ====================
 enum struct RosterEntry {
-    char name[64];
-    char behavior[32];
+    char name[MAX_BOTNAME];
+    char behavior[MAX_BEHAVIORNAME];
     int  team;
     bool assigned;
     int  assignedTo;
@@ -58,12 +62,10 @@ int             g_BehaviorCount   = 0;
 int             g_iBotBehavior[MAXPLAYERS + 1];
 
 // enum struct 字段不支持二维数组，武器列表单独用三维全局数组存放
-char            g_BehaviorWeapons[MAX_BEHAVIOR][MAX_PRIORITY][32];
+char            g_BehaviorWeapons[MAX_BEHAVIOR][MAX_PRIORITY][WEAPON_NAME_MAX];
 
 bool            g_bBoughtThisRound[MAXPLAYERS + 1];
 float           g_fNextAimTime[MAXPLAYERS + 1];
-
-StringMap       g_WeaponPrices;
 
 int             g_iTargetBot[MAXPLAYERS + 1];
 bool            g_bAiming[MAXPLAYERS + 1];
@@ -78,8 +80,9 @@ public void OnPluginStart()
     g_cvAutoBuy      = CreateConVar("csab_autobuy",      "1",  "CSAB自动购买",    FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_cvAutoBuyArmor = CreateConVar("csab_autobuy_armor","1",  "CSAB购买护甲",    FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_cvAimMult      = CreateConVar("csab_aim_mult",     "1.0","全局瞄准倍率",    FCVAR_NOTIFY, true, 0.1, true, 5.0);
+    g_cvTeammatesEnemy = CreateConVar("csab_teammates_enemy", "0", "是否将队友视为可瞄准目标（1=是）", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
-    InitWeaponPrices();
+    // 武器价格表为静态常量（static const），无需运行时分配，减少内存占用
 
     // ---- 只注册 csab_* 命令，绝不 Hook bot_* ----
     AddCommandListener(Listener_CsabAdd,   "csab_add");
@@ -102,6 +105,9 @@ public void OnPluginStart()
     RegConsoleCmd("sm_csabfollow",    Command_Follow,      "切换BOT跟随");
     RegConsoleCmd("sm_csabbuy",       Command_Buy,         "给BOT买枪 [武器]");
     RegConsoleCmd("sm_csabrelease",   Command_Release,     "释放BOT控制");
+
+    // ---- 管理员命令 ----
+    RegAdminCmd("sm_csabff", Command_ToggleTeammates, ADMFLAG_CONFIG, "切换：队友是否被当作瞄准目标");
 
     RegConsoleCmd("+botaim",  Command_AimKey,    "快捷键：按住瞄准");
     RegConsoleCmd("-botaim",  Command_AimRelease,"快捷键：松开瞄准");
@@ -169,12 +175,12 @@ void LoadBehavior()
             g_Behavior[g_BehaviorCount].weaponCount = 0;
             if (buf[0] != '\0')
             {
-                char parts[MAX_PRIORITY][32];
-                int cnt = ExplodeString(buf, ",", parts, MAX_PRIORITY, 32);
+                char parts[MAX_PRIORITY][WEAPON_NAME_MAX];
+                int cnt = ExplodeString(buf, ",", parts, MAX_PRIORITY, WEAPON_NAME_MAX);
                 for (int i = 0; i < cnt && i < MAX_PRIORITY; i++)
                 {
                     TrimString(parts[i]);
-                    strcopy(g_BehaviorWeapons[g_BehaviorCount][i], 32, parts[i]);
+                    strcopy(g_BehaviorWeapons[g_BehaviorCount][i], WEAPON_NAME_MAX, parts[i]);
                     g_Behavior[g_BehaviorCount].weaponCount++;
                 }
             }
@@ -207,8 +213,8 @@ void LoadRoster()
         do
         {
             if (g_RosterCount >= MAX_ROSTER) break;
-            kv.GetSectionName(g_Roster[g_RosterCount].name, 64);
-            kv.GetString("behavior", g_Roster[g_RosterCount].behavior, 32, "csab");
+            kv.GetSectionName(g_Roster[g_RosterCount].name, MAX_BOTNAME);
+            kv.GetString("behavior", g_Roster[g_RosterCount].behavior, MAX_BEHAVIORNAME, "csab");
 
             char t[8];
             kv.GetString("team", t, sizeof(t), "any");
@@ -224,34 +230,48 @@ void LoadRoster()
     PrintToServer("[CSAB] 已加载 %d 个BOT名单", g_RosterCount);
 }
 
-void InitWeaponPrices()
+// ==================== 武器表（静态常量，无运行时句柄） ====================
+static const char g_sWeaponNames[][] = {
+    "ak47", "m4a1", "sg552", "aug", "famas", "galil", "awp", "scout",
+    "sg550", "g3sg1", "mp5navy", "tmp", "p90", "mac10", "ump45",
+    "m3", "xm1014", "nova", "m249", "glock18", "usp", "p228",
+    "deagle", "elite", "fiveseven"
+};
+
+static const int g_iWeaponPrices[] = {
+    2500, 3100, 3500, 3500, 2250, 2000, 4750, 2750,
+    4200, 5000, 1500, 1250, 2350, 1400, 1700,
+    1700, 3000, 1200, 5750, 0, 0, 600,
+    650, 800, 750
+};
+
+// 仅某一方阵营可购买的武器，用于限制 BOT 购买当前阵营的枪
+static const char g_sTOnlyWeapons[][]  = { "ak47", "galil", "sg552", "mac10", "glock18", "g3sg1" };
+static const char g_sCtOnlyWeapons[][] = { "m4a1", "famas", "aug", "tmp", "usp", "fiveseven", "sg550" };
+
+// 返回武器价格；未知武器返回 -1
+int GetWeaponPrice(const char[] weapon)
 {
-    g_WeaponPrices = new StringMap();
-    g_WeaponPrices.SetValue("ak47",     2500);
-    g_WeaponPrices.SetValue("m4a1",     3100);
-    g_WeaponPrices.SetValue("sg552",    3500);
-    g_WeaponPrices.SetValue("aug",      3500);
-    g_WeaponPrices.SetValue("famas",    2250);
-    g_WeaponPrices.SetValue("galil",    2000);
-    g_WeaponPrices.SetValue("awp",      4750);
-    g_WeaponPrices.SetValue("scout",    2750);
-    g_WeaponPrices.SetValue("sg550",    4200);
-    g_WeaponPrices.SetValue("g3sg1",    5000);
-    g_WeaponPrices.SetValue("mp5navy",  1500);
-    g_WeaponPrices.SetValue("tmp",      1250);
-    g_WeaponPrices.SetValue("p90",      2350);
-    g_WeaponPrices.SetValue("mac10",    1400);
-    g_WeaponPrices.SetValue("ump45",    1700);
-    g_WeaponPrices.SetValue("m3",       1700);
-    g_WeaponPrices.SetValue("xm1014",   3000);
-    g_WeaponPrices.SetValue("nova",     1200);
-    g_WeaponPrices.SetValue("m249",     5750);
-    g_WeaponPrices.SetValue("glock18",  0);
-    g_WeaponPrices.SetValue("usp",      0);
-    g_WeaponPrices.SetValue("p228",     600);
-    g_WeaponPrices.SetValue("deagle",   650);
-    g_WeaponPrices.SetValue("elite",    800);
-    g_WeaponPrices.SetValue("fiveseven",750);
+    for (int i = 0; i < sizeof(g_sWeaponNames); i++)
+        if (StrEqual(weapon, g_sWeaponNames[i], false))
+            return g_iWeaponPrices[i];
+    return -1;
+}
+
+// 判断武器是否适用于指定阵营
+bool IsWeaponAllowedForTeam(const char[] weapon, int team)
+{
+    if (team == CS_TEAM_T)
+    {
+        for (int i = 0; i < sizeof(g_sCtOnlyWeapons); i++)
+            if (StrEqual(weapon, g_sCtOnlyWeapons[i], false)) return false;
+    }
+    else if (team == CS_TEAM_CT)
+    {
+        for (int i = 0; i < sizeof(g_sTOnlyWeapons); i++)
+            if (StrEqual(weapon, g_sTOnlyWeapons[i], false)) return false;
+    }
+    return true;
 }
 
 // ==================== CSAB 命令拦截 ====================
@@ -606,10 +626,14 @@ void ApplyBuy(int bot, int bIdx)
         return;
     }
 
+    int team = GetClientTeam(bot);
     for (int i = 0; i < g_Behavior[bIdx].weaponCount; i++)
     {
-        int price;
-        if (!g_WeaponPrices.GetValue(g_BehaviorWeapons[bIdx][i], price)) continue;
+        // 只购买当前阵营可用的枪
+        if (!IsWeaponAllowedForTeam(g_BehaviorWeapons[bIdx][i], team)) continue;
+
+        int price = GetWeaponPrice(g_BehaviorWeapons[bIdx][i]);
+        if (price < 0) continue;
         if (money < price) continue;
         if (cur > 0) RemovePlayerItem(bot, cur);
 
@@ -631,8 +655,10 @@ bool HasPriorityWeapon(int bot, int bIdx)
     if (w <= 0) return false;
     char cls[64]; GetEntityClassname(w, cls, sizeof(cls));
     char expected[64];
+    int team = GetClientTeam(bot);
     for (int i = 0; i < g_Behavior[bIdx].weaponCount; i++)
     {
+        if (!IsWeaponAllowedForTeam(g_BehaviorWeapons[bIdx][i], team)) continue;
         Format(expected, sizeof(expected), "weapon_%s", g_BehaviorWeapons[bIdx][i]);
         if (StrEqual(cls, expected, false)) return true;
     }
@@ -836,12 +862,18 @@ public Action Command_Buy(int client, int args)
         return Plugin_Handled;
     }
 
-    char w[32]; GetCmdArg(1, w, sizeof(w));
+    char w[WEAPON_NAME_MAX]; GetCmdArg(1, w, sizeof(w));
 
-    int price;
-    if (!g_WeaponPrices.GetValue(w, price))
+    int price = GetWeaponPrice(w);
+    if (price < 0)
     {
         PrintToChat(client, "[CSAB] 未知武器: %s", w);
+        return Plugin_Handled;
+    }
+
+    if (!IsWeaponAllowedForTeam(w, GetClientTeam(bot)))
+    {
+        PrintToChat(client, "[CSAB] %s 不适用于该BOT的阵营", w);
         return Plugin_Handled;
     }
 
@@ -872,6 +904,16 @@ public Action Command_Release(int client, int args)
     g_iTargetBot[client] = 0;
     g_bAiming[client]    = false;
     g_bFollowing[client] = false;
+    return Plugin_Handled;
+}
+
+// ==================== 管理员命令 ====================
+// 切换：队友是否被当作瞄准目标
+public Action Command_ToggleTeammates(int client, int args)
+{
+    bool enabled = !g_cvTeammatesEnemy.BoolValue;
+    g_cvTeammatesEnemy.SetInt(enabled ? 1 : 0);
+    ReplyToCommand(client, "[CSAB] 队友视为敌人: %s", enabled ? "开启" : "关闭");
     return Plugin_Handled;
 }
 
@@ -959,7 +1001,8 @@ int FindClosestEnemy(int bot, float maxFov)
     for (int i = 1; i <= MaxClients; i++)
     {
         if (!IsValidClient(i) || !IsPlayerAlive(i) || i == bot) continue;
-        if (GetClientTeam(i) == team) continue;
+        // 队友默认不算敌人；csab_teammates_enemy 1 时队友也会被瞄准
+        if (!g_cvTeammatesEnemy.BoolValue && GetClientTeam(i) == team) continue;
 
         float ep[3]; GetClientEyePosition(i, ep);
         float d[3]; MakeVectorFromPoints(bp, ep, d); NormalizeVector(d, d);

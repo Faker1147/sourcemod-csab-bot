@@ -25,8 +25,11 @@
 
 - 6 个行为档：`csab` / `csab_sniper` / `csab_rifler` / `csab_defense` / `csab_eco` / `csab_rookie`
 - 120 个 csab 系列 BOT 名单
-- 每档独立配置瞄准速度 / 视野 / 反应 / 误差 / 侵略性 / 购买优先级
+- 每档独立配置瞄准速度 / 视野 / 反应 / 误差 / 购买优先级
 - 玩家可接管 BOT：`+botaim` 瞄准、`+botmove` 走位
+- BOT 只购买**当前阵营**可用的枪（CT 不买 AK、T 不买 M4）
+- 可开关「队友是否算敌人」：`csab_teammates_enemy`
+- 静态常量武器表 + 精简数组，插件数据段占用约为旧版的 60%
 - 一键停用：`csab_enabled 0`，服务器立即恢复原版 ZBot 行为
 
 ## 环境要求
@@ -94,6 +97,7 @@ addons\sourcemod\scripting\spcomp.exe addons\sourcemod\scripting\csab_bot.sp
 | `sm_csabrelease`              | 释放 BOT 控制                 |
 | `+botaim` / `-botaim`         | 快捷键：按住瞄准 / 松开       |
 | `+botmove`                    | 快捷键：BOT 前进              |
+| `sm_csabff`                   | 【管理员】切换：队友是否被当作瞄准目标 |
 
 ## 服务器命令
 
@@ -115,6 +119,17 @@ addons\sourcemod\scripting\spcomp.exe addons\sourcemod\scripting\csab_bot.sp
 | `csab_autobuy`        | 1    | 自动购买主武器   |
 | `csab_autobuy_armor`  | 1    | 自动购买护甲     |
 | `csab_aim_mult`       | 1.0  | 全局瞄准速度倍率 |
+| `csab_teammates_enemy`| 0    | 是否将队友视为可瞄准目标（1=是） |
+
+## 阵营武器限制
+
+BOT 只会从 `behavior.cfg` 的 `weapons` 列表中挑选**当前阵营可购买**的武器：
+
+- **T 专用**：`ak47` `galil` `sg552` `mac10` `glock18` `g3sg1`
+- **CT 专用**：`m4a1` `famas` `aug` `tmp` `usp` `fiveseven` `sg550`
+
+例如 `csab` 档的 `ak47,m4a1,awp,deagle`，在 T 方会买 AK / AWP，在 CT 方会买 M4 / AWP，
+不会出现「CT 拿 AK」的情况。该限制同时作用于自动购买与 `sm_csabbuy`。
 
 ## 行为档配置
 

@@ -5,7 +5,7 @@ set GAME_DIR=%1
 if "%GAME_DIR%"=="" set GAME_DIR=.
 set SM_DIR=%GAME_DIR%\addons\sourcemod
 
-echo ==== CSAB Bot Pack v2.0 安装 ====
+echo ==== CSAB Bot Pack v2.1 安装 ====
 if not exist "%SM_DIR%" (echo [错误] 未找到 SourceMod: %SM_DIR% & exit /b 1)
 
 if not exist "%SM_DIR%\scripting"         mkdir "%SM_DIR%\scripting"

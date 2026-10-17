@@ -9,7 +9,7 @@ GAME_DIR="${1:-.}"
 SM_DIR="$GAME_DIR/addons/sourcemod"
 SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "==== CSAB Bot Pack v2.0 安装 ===="
+echo "==== CSAB Bot Pack v2.1 安装 ===="
 
 if [ ! -d "$SM_DIR" ]; then
     echo "[错误] 未找到 SourceMod: $SM_DIR"
